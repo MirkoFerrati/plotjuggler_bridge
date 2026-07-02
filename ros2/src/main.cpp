@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
   node->declare_parameter<int>("port", 9090);
   node->declare_parameter<double>("publish_rate", 50.0);
   node->declare_parameter<double>("session_timeout", 10.0);
-  node->declare_parameter<bool>("strip_large_messages", true);
+  node->declare_parameter<bool>("strip_large_messages", false);
 
   int port = node->get_parameter("port").as_int();
   double publish_rate = node->get_parameter("publish_rate").as_double();
@@ -81,13 +81,13 @@ int main(int argc, char** argv) {
 
     auto timeout_timer = node->create_wall_timer(1s, [&server]() { server.check_session_timeouts(); });
 
-    // Spin until shutdown
+    // Spin until shutdown. spin() blocks waiting for work and returns when
+    // rclcpp::shutdown() runs (e.g. on SIGINT) — unlike spin_some() in a
+    // loop, which returns immediately when idle and busy-spins a full core.
     rclcpp::executors::SingleThreadedExecutor executor;
     executor.add_node(node);
 
-    while (rclcpp::ok()) {
-      executor.spin_some(100ms);
-    }
+    executor.spin();
 
     // Graceful shutdown
     RCLCPP_INFO(node->get_logger(), "Shutting down bridge server...");
