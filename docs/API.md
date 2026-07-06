@@ -256,6 +256,63 @@ If some subscribed topics are not currently available (publisher down) or fail t
 
 Both commands are idempotent. Smart ROS2 management: when all clients interested in a topic are paused, the ROS2 subscription is released.
 
+## Pushed Topic Advertisement (topics_changed)
+
+Clients can opt in to be notified when the server's (whitelist-filtered)
+topic set changes, instead of polling `get_topics`.
+
+**Subscribe Request:**
+```json
+{"command": "subscribe_topic_updates", "id": "tu1"}
+```
+
+**Subscribe Response:**
+```json
+{"status": "ok", "id": "tu1", "protocol_version": 1, "topic_updates": true}
+```
+
+**Unsubscribe Request:**
+```json
+{"command": "unsubscribe_topic_updates", "id": "tu2"}
+```
+
+**Unsubscribe Response:**
+```json
+{"status": "ok", "id": "tu2", "protocol_version": 1, "topic_updates": false}
+```
+
+Both commands are idempotent and create a session if the client does not
+already have one (like `pause`/`resume`).
+
+The server periodically polls the topic graph (see `topic_poll_interval`
+below) and, for every session currently opted in, sends a **notification**
+(not a response to any request — it has no `id`) whenever the topic set has
+changed since the last poll:
+
+```json
+{"notification": "topics_changed",
+ "added": [{"name": "/t", "type": "pkg/msg/T"}],
+ "removed": ["/gone"],
+ "protocol_version": 1}
+```
+
+- `added` and `removed` may each be empty, but a notification is only sent
+  when at least one of them is non-empty.
+- A topic whose type changes (same name, different type) is reported as both
+  removed and added.
+- Only whitelisted topics (see [Topic Whitelist](#topic-whitelist)) are
+  considered — a non-whitelisted topic appearing or disappearing never
+  triggers a notification.
+- The very first poll after the server starts never sends a notification (it
+  only establishes the initial snapshot); notifications begin from the
+  second poll onward.
+- **Clients must tolerate unknown `notification` types** appearing in future
+  protocol versions and ignore ones they don't recognize.
+
+The poll interval is configurable:
+- **ROS2**: double parameter `topic_poll_interval`, default `1.0` seconds. `0` disables polling entirely.
+- **FastDDS / RTI**: CLI flag `--topic-poll-interval`, default `1.0` seconds. `0` disables polling entirely.
+
 ## Heartbeat
 
 Clients must send a heartbeat at least once per second. The default timeout is 10 seconds.

@@ -192,6 +192,10 @@ void BridgeServer::process_single_request(const std::vector<uint8_t>& request_da
         response = handle_pause(client_id, request_json);
       } else if (command == "resume") {
         response = handle_resume(client_id, request_json);
+      } else if (command == "subscribe_topic_updates") {
+        response = handle_subscribe_topic_updates(client_id, request_json);
+      } else if (command == "unsubscribe_topic_updates") {
+        response = handle_unsubscribe_topic_updates(client_id, request_json);
       } else {
         response = create_error_response("UNKNOWN_COMMAND", "Unknown command: " + command, request_json);
       }
@@ -610,6 +614,43 @@ std::string BridgeServer::handle_resume(const std::string& client_id, const nloh
   return response.dump();
 }
 
+std::string BridgeServer::handle_subscribe_topic_updates(const std::string& client_id, const nlohmann::json& request) {
+  if (!session_manager_->session_exists(client_id)) {
+    session_manager_->create_session(client_id);
+    spdlog::info("Created new session for client '{}'", client_id);
+  }
+
+  session_manager_->update_heartbeat(client_id);
+  session_manager_->set_topic_updates(client_id, true);
+
+  spdlog::debug("Client '{}' subscribed to topic updates", client_id);
+
+  json response;
+  response["status"] = "ok";
+  response["topic_updates"] = true;
+  inject_response_fields(response, request);
+  return response.dump();
+}
+
+std::string BridgeServer::handle_unsubscribe_topic_updates(
+    const std::string& client_id, const nlohmann::json& request) {
+  if (!session_manager_->session_exists(client_id)) {
+    session_manager_->create_session(client_id);
+    spdlog::info("Created new session for client '{}'", client_id);
+  }
+
+  session_manager_->update_heartbeat(client_id);
+  session_manager_->set_topic_updates(client_id, false);
+
+  spdlog::debug("Client '{}' unsubscribed from topic updates", client_id);
+
+  json response;
+  response["status"] = "ok";
+  response["topic_updates"] = false;
+  inject_response_fields(response, request);
+  return response.dump();
+}
+
 void BridgeServer::inject_response_fields(nlohmann::json& response, const nlohmann::json& request) const {
   response["protocol_version"] = kProtocolVersion;
   if (request.contains("id") && request["id"].is_string()) {
@@ -638,6 +679,74 @@ void BridgeServer::check_session_timeouts() {
   for (const auto& client_id : timed_out_sessions) {
     spdlog::warn("Session timeout for client '{}'", client_id);
     cleanup_session(client_id);
+  }
+}
+
+void BridgeServer::check_topic_changes() {
+  if (!initialized_) {
+    return;
+  }
+
+  std::unordered_map<std::string, std::string> current_topics;
+  for (const auto& topic : topic_source_->get_topics()) {
+    if (!whitelist_.matches(topic.name)) {
+      continue;
+    }
+    current_topics[topic.name] = topic.type;
+  }
+
+  json added = json::array();
+  json removed = json::array();
+
+  {
+    std::lock_guard<std::mutex> lock(topics_mutex_);
+
+    if (!topics_snapshot_taken_) {
+      known_topics_ = std::move(current_topics);
+      topics_snapshot_taken_ = true;
+      return;
+    }
+
+    for (const auto& [name, type] : current_topics) {
+      auto it = known_topics_.find(name);
+      if (it == known_topics_.end() || it->second != type) {
+        json entry;
+        entry["name"] = name;
+        entry["type"] = type;
+        added.push_back(entry);
+      }
+    }
+
+    for (const auto& [name, type] : known_topics_) {
+      auto it = current_topics.find(name);
+      if (it == current_topics.end() || it->second != type) {
+        removed.push_back(name);
+      }
+    }
+
+    known_topics_ = std::move(current_topics);
+  }  // topics_mutex_ released here — never send notifications while holding it
+
+  if (added.empty() && removed.empty()) {
+    return;
+  }
+
+  json notification;
+  notification["notification"] = "topics_changed";
+  notification["added"] = added;
+  notification["removed"] = removed;
+  notification["protocol_version"] = kProtocolVersion;
+
+  std::vector<uint8_t> bytes;
+  {
+    std::string text = notification.dump();
+    bytes.assign(text.begin(), text.end());
+  }
+
+  for (const auto& client_id : session_manager_->get_active_sessions()) {
+    if (session_manager_->wants_topic_updates(client_id)) {
+      middleware_->send_reply(client_id, bytes);
+    }
   }
 }
 

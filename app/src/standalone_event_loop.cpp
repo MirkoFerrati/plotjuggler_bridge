@@ -55,6 +55,7 @@ void run_standalone_event_loop(
   auto last_publish = clock::now();
   auto last_timeout_check = clock::now();
   auto last_stats_print = clock::now();
+  auto last_topic_poll = clock::now();
 
   while (!g_shutdown.load()) {
     server.process_requests();
@@ -69,6 +70,13 @@ void run_standalone_event_loop(
     if (now - last_timeout_check >= std::chrono::seconds(1)) {
       server.check_session_timeouts();
       last_timeout_check = now;
+    }
+
+    if (config.topic_poll_interval > 0.0 &&
+        now - last_topic_poll >= std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::duration<double>(config.topic_poll_interval))) {
+      server.check_topic_changes();
+      last_topic_poll = now;
     }
 
     if (config.stats_enabled && now - last_stats_print >= std::chrono::seconds(5)) {

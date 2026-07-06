@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
   node->declare_parameter<std::vector<std::string>>("topic_whitelist", {".*"});
   node->declare_parameter<int>("min_qos_depth", 1);
   node->declare_parameter<int>("max_qos_depth", 100);
+  node->declare_parameter<double>("topic_poll_interval", 1.0);
 
   int port = node->get_parameter("port").as_int();
   double publish_rate = node->get_parameter("publish_rate").as_double();
@@ -54,12 +55,22 @@ int main(int argc, char** argv) {
   std::vector<std::string> topic_whitelist = node->get_parameter("topic_whitelist").as_string_array();
   int64_t min_qos_depth = node->get_parameter("min_qos_depth").as_int();
   int64_t max_qos_depth = node->get_parameter("max_qos_depth").as_int();
+  double topic_poll_interval = node->get_parameter("topic_poll_interval").as_double();
 
   RCLCPP_INFO(
       node->get_logger(),
       "Configuration: port=%d, publish_rate=%.1f Hz, session_timeout=%.1f s, strip_large_messages=%s, "
-      "min_qos_depth=%ld, max_qos_depth=%ld",
-      port, publish_rate, session_timeout, strip_large_messages ? "true" : "false", min_qos_depth, max_qos_depth);
+      "min_qos_depth=%ld, max_qos_depth=%ld, topic_poll_interval=%.1f s",
+      port, publish_rate, session_timeout, strip_large_messages ? "true" : "false", min_qos_depth, max_qos_depth,
+      topic_poll_interval);
+
+  if (topic_poll_interval < 0.0) {
+    RCLCPP_ERROR(
+        node->get_logger(), "Invalid topic_poll_interval: %.1f (must be >= 0; 0 disables polling)",
+        topic_poll_interval);
+    rclcpp::shutdown();
+    return 1;
+  }
 
   auto whitelist_result = pj_bridge::WhitelistFilter::create(topic_whitelist);
   if (!whitelist_result) {
@@ -111,6 +122,14 @@ int main(int argc, char** argv) {
 
     auto timeout_timer = node->create_wall_timer(1s, [&server]() { server.check_session_timeouts(); });
 
+    // topic_poll_interval == 0 disables the pushed topic-advertisement poll.
+    rclcpp::TimerBase::SharedPtr topic_poll_timer;
+    if (topic_poll_interval > 0.0) {
+      topic_poll_timer = node->create_wall_timer(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(topic_poll_interval)),
+          [&server]() { server.check_topic_changes(); });
+    }
+
     // Spin until shutdown. spin() blocks waiting for work and returns when
     // rclcpp::shutdown() runs (e.g. on SIGINT) — unlike spin_some() in a
     // loop, which returns immediately when idle and busy-spins a full core.
@@ -125,6 +144,9 @@ int main(int argc, char** argv) {
     request_timer->cancel();
     publish_timer->cancel();
     timeout_timer->cancel();
+    if (topic_poll_timer) {
+      topic_poll_timer->cancel();
+    }
     executor.remove_node(node);
 
     // Clear the subscription manager callback before server destruction

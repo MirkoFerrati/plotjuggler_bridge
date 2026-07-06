@@ -109,6 +109,18 @@ class BridgeServer {
   void check_session_timeouts();
 
   /**
+   * @brief Check whether the (whitelist-filtered) topic set has changed and
+   * notify opted-in clients
+   *
+   * Called externally by the event loop (e.g. every topic_poll_interval
+   * seconds). The first call after construction only takes a snapshot and
+   * sends nothing; subsequent calls diff against that snapshot and send a
+   * `topics_changed` notification (added/removed) to every session that
+   * called `subscribe_topic_updates`, but only when the diff is non-empty.
+   */
+  void check_topic_changes();
+
+  /**
    * @brief Get the number of active client sessions
    */
   size_t get_active_session_count() const;
@@ -132,6 +144,8 @@ class BridgeServer {
   std::string handle_heartbeat(const std::string& client_id, const nlohmann::json& request);
   std::string handle_pause(const std::string& client_id, const nlohmann::json& request);
   std::string handle_resume(const std::string& client_id, const nlohmann::json& request);
+  std::string handle_subscribe_topic_updates(const std::string& client_id, const nlohmann::json& request);
+  std::string handle_unsubscribe_topic_updates(const std::string& client_id, const nlohmann::json& request);
   std::string create_error_response(
       const std::string& error_code, const std::string& message, const nlohmann::json& request) const;
   void inject_response_fields(nlohmann::json& response, const nlohmann::json& request) const;
@@ -167,11 +181,22 @@ class BridgeServer {
   //   cleanup_mutex_ > last_sent_mutex_ > stats_mutex_
   // SessionManager::mutex_ may be acquired while holding any of these.
   // Never acquire a higher-order lock while holding a lower-order one.
+  // topics_mutex_ is a LEAF lock: it is held only to compute the
+  // added/removed diff and swap in the new known_topics_ snapshot. Never
+  // call middleware_ or session_manager_ (or acquire any other lock in this
+  // class) while holding topics_mutex_ — release it before sending
+  // notifications.
   std::mutex cleanup_mutex_;
 
   // Per-client per-topic last-sent timestamp (nanoseconds) for rate limiting
   std::unordered_map<std::string, std::unordered_map<std::string, uint64_t>> last_sent_times_;
   std::mutex last_sent_mutex_;
+
+  // Whitelist-filtered topic name -> type snapshot, used by check_topic_changes()
+  // to detect additions/removals/type-changes. LEAF lock (see comment above).
+  std::unordered_map<std::string, std::string> known_topics_;
+  bool topics_snapshot_taken_{false};
+  std::mutex topics_mutex_;
 };
 
 }  // namespace pj_bridge

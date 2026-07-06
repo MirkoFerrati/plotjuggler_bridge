@@ -157,6 +157,25 @@ class MockMiddleware : public MiddlewareInterface {
     binary_sends_.clear();
   }
 
+  /// Return all replies sent to a given client, in send order (parsed JSON).
+  std::vector<json> get_replies(const std::string& client_id) {
+    std::lock_guard<std::mutex> lock(reply_mutex_);
+    std::vector<json> result;
+    for (const auto& [cid, data] : replies_) {
+      if (cid == client_id) {
+        std::string text(data.begin(), data.end());
+        result.push_back(json::parse(text, nullptr, false));
+      }
+    }
+    return result;
+  }
+
+  /// Discard all recorded replies (useful to isolate a subsequent action's output).
+  void clear_replies() {
+    std::lock_guard<std::mutex> lock(reply_mutex_);
+    replies_.clear();
+  }
+
  private:
   bool ready_{false};
 
@@ -2094,4 +2113,231 @@ TEST_F(BridgeServerTest, SubscribeMixedWhitelistedAndNonWhitelistedTopicsPartial
   EXPECT_TRUE(found_blocked_failure);
   EXPECT_EQ(mock_sub_manager_->ref_count("/allowed/foo"), 1);
   EXPECT_EQ(mock_sub_manager_->ref_count("/blocked"), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Pushed topic advertisement (subscribe/unsubscribe_topic_updates, check_topic_changes)
+// ---------------------------------------------------------------------------
+
+// SubscribeTopicUpdatesReturnsOkTrue
+TEST_F(BridgeServerTest, SubscribeTopicUpdatesReturnsOkTrue) {
+  ASSERT_TRUE(server_->initialize());
+
+  json req;
+  req["command"] = "subscribe_topic_updates";
+  req["id"] = "tu1";
+  mock_->push_request("client_tu_1", req.dump());
+  server_->process_requests();
+
+  json reply = mock_->pop_reply("client_tu_1");
+  ASSERT_FALSE(reply.is_discarded());
+  EXPECT_EQ(reply["status"], "ok");
+  EXPECT_TRUE(reply["topic_updates"].get<bool>());
+  EXPECT_EQ(reply["id"], "tu1");
+  EXPECT_TRUE(reply.contains("protocol_version"));
+
+  // Repeated call is idempotent — same result.
+  mock_->push_request("client_tu_1", req.dump());
+  server_->process_requests();
+  json reply2 = mock_->pop_reply("client_tu_1");
+  ASSERT_FALSE(reply2.is_discarded());
+  EXPECT_EQ(reply2["status"], "ok");
+  EXPECT_TRUE(reply2["topic_updates"].get<bool>());
+}
+
+// UnsubscribeTopicUpdatesReturnsOkFalse
+TEST_F(BridgeServerTest, UnsubscribeTopicUpdatesReturnsOkFalse) {
+  ASSERT_TRUE(server_->initialize());
+
+  json req;
+  req["command"] = "unsubscribe_topic_updates";
+  req["id"] = "tu2";
+  mock_->push_request("client_tu_2", req.dump());
+  server_->process_requests();
+
+  json reply = mock_->pop_reply("client_tu_2");
+  ASSERT_FALSE(reply.is_discarded());
+  EXPECT_EQ(reply["status"], "ok");
+  EXPECT_FALSE(reply["topic_updates"].get<bool>());
+  EXPECT_EQ(reply["id"], "tu2");
+  EXPECT_TRUE(reply.contains("protocol_version"));
+
+  // Repeated call is idempotent — same result.
+  mock_->push_request("client_tu_2", req.dump());
+  server_->process_requests();
+  json reply2 = mock_->pop_reply("client_tu_2");
+  ASSERT_FALSE(reply2.is_discarded());
+  EXPECT_EQ(reply2["status"], "ok");
+  EXPECT_FALSE(reply2["topic_updates"].get<bool>());
+}
+
+// CheckTopicChangesFirstCallSendsNothing
+TEST_F(BridgeServerTest, CheckTopicChangesFirstCallSendsNothing) {
+  ASSERT_TRUE(server_->initialize());
+  mock_topic_source_->set_topics({{"/a", "std_msgs/msg/String"}});
+
+  json sub;
+  sub["command"] = "subscribe_topic_updates";
+  mock_->push_request("client_first", sub.dump());
+  server_->process_requests();
+  mock_->clear_replies();
+
+  server_->check_topic_changes();
+
+  auto replies = mock_->get_replies("client_first");
+  EXPECT_TRUE(replies.empty());
+}
+
+// CheckTopicChangesNotifiesAddedTopicOnlyToOptedInClient
+TEST_F(BridgeServerTest, CheckTopicChangesNotifiesAddedTopicOnlyToOptedInClient) {
+  ASSERT_TRUE(server_->initialize());
+  mock_topic_source_->set_topics({{"/a", "std_msgs/msg/String"}});
+
+  json sub;
+  sub["command"] = "subscribe_topic_updates";
+  mock_->push_request("client_opted_in", sub.dump());
+  server_->process_requests();
+
+  json hb;
+  hb["command"] = "heartbeat";
+  mock_->push_request("client_plain", hb.dump());
+  server_->process_requests();
+
+  server_->check_topic_changes();  // first call: snapshot only, sends nothing
+  mock_->clear_replies();
+
+  mock_topic_source_->set_topics({{"/a", "std_msgs/msg/String"}, {"/b", "sensor_msgs/msg/Imu"}});
+  server_->check_topic_changes();
+
+  auto opted_in_replies = mock_->get_replies("client_opted_in");
+  ASSERT_EQ(opted_in_replies.size(), 1u);
+  json notif = opted_in_replies[0];
+  EXPECT_EQ(notif["notification"], "topics_changed");
+  EXPECT_TRUE(notif.contains("protocol_version"));
+  ASSERT_TRUE(notif["removed"].empty());
+  ASSERT_EQ(notif["added"].size(), 1u);
+  EXPECT_EQ(notif["added"][0]["name"], "/b");
+  EXPECT_EQ(notif["added"][0]["type"], "sensor_msgs/msg/Imu");
+
+  auto plain_replies = mock_->get_replies("client_plain");
+  EXPECT_TRUE(plain_replies.empty());
+}
+
+// CheckTopicChangesNotifiesRemovedTopic
+TEST_F(BridgeServerTest, CheckTopicChangesNotifiesRemovedTopic) {
+  ASSERT_TRUE(server_->initialize());
+  mock_topic_source_->set_topics({{"/a", "std_msgs/msg/String"}, {"/b", "std_msgs/msg/String"}});
+
+  json sub;
+  sub["command"] = "subscribe_topic_updates";
+  mock_->push_request("client_opted_in", sub.dump());
+  server_->process_requests();
+
+  server_->check_topic_changes();  // snapshot
+  mock_->clear_replies();
+
+  mock_topic_source_->remove_topic("/b");
+  server_->check_topic_changes();
+
+  auto replies = mock_->get_replies("client_opted_in");
+  ASSERT_EQ(replies.size(), 1u);
+  json notif = replies[0];
+  ASSERT_TRUE(notif["added"].empty());
+  ASSERT_EQ(notif["removed"].size(), 1u);
+  EXPECT_EQ(notif["removed"][0], "/b");
+}
+
+// CheckTopicChangesNoChangeSendsNothing
+TEST_F(BridgeServerTest, CheckTopicChangesNoChangeSendsNothing) {
+  ASSERT_TRUE(server_->initialize());
+  mock_topic_source_->set_topics({{"/a", "std_msgs/msg/String"}});
+
+  json sub;
+  sub["command"] = "subscribe_topic_updates";
+  mock_->push_request("client_opted_in", sub.dump());
+  server_->process_requests();
+
+  server_->check_topic_changes();  // snapshot
+  mock_->clear_replies();
+
+  server_->check_topic_changes();  // nothing changed
+
+  auto replies = mock_->get_replies("client_opted_in");
+  EXPECT_TRUE(replies.empty());
+}
+
+// CheckTopicChangesIgnoresNonWhitelistedTopics
+TEST_F(BridgeServerTest, CheckTopicChangesIgnoresNonWhitelistedTopics) {
+  auto whitelist_result = WhitelistFilter::create({"/allowed.*"});
+  ASSERT_TRUE(whitelist_result.has_value());
+  server_ = std::make_unique<BridgeServer>(
+      mock_topic_source_, mock_sub_manager_, mock_, 19999, 10.0, 50.0, whitelist_result.value());
+  ASSERT_TRUE(server_->initialize());
+
+  mock_topic_source_->set_topics({{"/allowed/foo", "std_msgs/msg/String"}});
+
+  json sub;
+  sub["command"] = "subscribe_topic_updates";
+  mock_->push_request("client_wl", sub.dump());
+  server_->process_requests();
+
+  server_->check_topic_changes();  // snapshot
+  mock_->clear_replies();
+
+  mock_topic_source_->set_topics({{"/allowed/foo", "std_msgs/msg/String"}, {"/blocked", "std_msgs/msg/String"}});
+  server_->check_topic_changes();
+
+  auto replies = mock_->get_replies("client_wl");
+  EXPECT_TRUE(replies.empty());
+}
+
+// CheckTopicChangesTypeChangeAppearsInBothAddedAndRemoved
+TEST_F(BridgeServerTest, CheckTopicChangesTypeChangeAppearsInBothAddedAndRemoved) {
+  ASSERT_TRUE(server_->initialize());
+  mock_topic_source_->set_topics({{"/a", "std_msgs/msg/String"}});
+
+  json sub;
+  sub["command"] = "subscribe_topic_updates";
+  mock_->push_request("client_opted_in", sub.dump());
+  server_->process_requests();
+
+  server_->check_topic_changes();  // snapshot
+  mock_->clear_replies();
+
+  mock_topic_source_->set_topics({{"/a", "std_msgs/msg/Header"}});
+  server_->check_topic_changes();
+
+  auto replies = mock_->get_replies("client_opted_in");
+  ASSERT_EQ(replies.size(), 1u);
+  json notif = replies[0];
+  ASSERT_EQ(notif["removed"].size(), 1u);
+  EXPECT_EQ(notif["removed"][0], "/a");
+  ASSERT_EQ(notif["added"].size(), 1u);
+  EXPECT_EQ(notif["added"][0]["name"], "/a");
+  EXPECT_EQ(notif["added"][0]["type"], "std_msgs/msg/Header");
+}
+
+// UnsubscribeTopicUpdatesStopsNotifications
+TEST_F(BridgeServerTest, UnsubscribeTopicUpdatesStopsNotifications) {
+  ASSERT_TRUE(server_->initialize());
+  mock_topic_source_->set_topics({{"/a", "std_msgs/msg/String"}});
+
+  json sub;
+  sub["command"] = "subscribe_topic_updates";
+  mock_->push_request("client_x", sub.dump());
+  server_->process_requests();
+
+  server_->check_topic_changes();  // snapshot
+
+  json unsub;
+  unsub["command"] = "unsubscribe_topic_updates";
+  mock_->push_request("client_x", unsub.dump());
+  server_->process_requests();
+  mock_->clear_replies();
+
+  mock_topic_source_->set_topics({{"/a", "std_msgs/msg/String"}, {"/b", "std_msgs/msg/String"}});
+  server_->check_topic_changes();
+
+  auto replies = mock_->get_replies("client_x");
+  EXPECT_TRUE(replies.empty());
 }

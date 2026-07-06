@@ -40,6 +40,7 @@ int main(int argc, char* argv[]) {
   std::string log_level = "info";
   bool stats_enabled = false;
   std::vector<std::string> topic_whitelist{".*"};
+  double topic_poll_interval = 1.0;
 
   app.add_option("--domains,-d", domain_ids, "DDS domain IDs")->required()->expected(1, -1);
   app.add_option("--port,-p", port, "WebSocket port")->default_val(9090)->check(CLI::Range(1, 65535));
@@ -48,6 +49,10 @@ int main(int argc, char* argv[]) {
   app.add_option("--qos-profile", qos_profile, "QoS profile XML file path");
   app.add_option("--log-level", log_level, "Log level (trace, debug, info, warn, error)")->default_val("info");
   app.add_flag("--stats", stats_enabled, "Print statistics every 5 seconds");
+  app.add_option(
+         "--topic-poll-interval", topic_poll_interval,
+         "Interval in seconds between topics_changed notification polls (0 disables)")
+      ->default_val(1.0);
   // Bound variable is already initialized to {".*"} (match everything); CLI11
   // leaves it untouched if the flag is not passed, so no default_val() is
   // needed (and default_val() on a vector<string> would round-trip through a
@@ -67,10 +72,16 @@ int main(int argc, char* argv[]) {
     spdlog::info("  QoS profile: {}", qos_profile);
   }
   spdlog::info("  Topic whitelist: {}", fmt::join(topic_whitelist, ", "));
+  spdlog::info("  Topic poll interval: {:.1f} s", topic_poll_interval);
 
   auto whitelist_result = pj_bridge::WhitelistFilter::create(topic_whitelist);
   if (!whitelist_result) {
     spdlog::error("Invalid --topic-whitelist: {}", whitelist_result.error());
+    return 1;
+  }
+
+  if (topic_poll_interval < 0.0) {
+    spdlog::error("Invalid --topic-poll-interval: {:.1f} (must be >= 0; 0 disables polling)", topic_poll_interval);
     return 1;
   }
 
@@ -84,7 +95,7 @@ int main(int argc, char* argv[]) {
         std::move(whitelist_result.value()));
 
     pj_bridge::run_standalone_event_loop(
-        server, sub_manager, middleware, {port, publish_rate, session_timeout, stats_enabled});
+        server, sub_manager, middleware, {port, publish_rate, session_timeout, stats_enabled, topic_poll_interval});
   } catch (const std::exception& e) {
     spdlog::error("Fatal error: {}", e.what());
     return 1;
