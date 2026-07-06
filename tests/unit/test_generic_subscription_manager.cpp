@@ -337,3 +337,21 @@ TEST_F(GenericSubscriptionManagerTest, AdaptQosDepthDefaultsTo100WhenNoPublisher
 
   EXPECT_EQ(qos.depth(), 100u);
 }
+
+TEST_F(GenericSubscriptionManagerTest, AdaptQosDepthFallsBackTo100WhenDepthUnknown) {
+  // A KEEP_ALL publisher reports history depth 0 through discovery — the
+  // same value RMWs that don't propagate depth at all (e.g. rmw_fastrtps_cpp)
+  // report for every publisher. A total of 0 must be treated as "unknown"
+  // and fall back to the historical default of 100, not clamped up to
+  // min_qos_depth (a depth-1 queue would drop messages on high-rate topics).
+  auto publisher =
+      node_->create_publisher<sensor_msgs::msg::Imu>("/qos_depth_keep_all_topic", rclcpp::QoS(rclcpp::KeepAll()));
+  wait_for_publisher_count(node_, "/qos_depth_keep_all_topic", 1);
+
+  ASSERT_EQ(node_->get_publishers_info_by_topic("/qos_depth_keep_all_topic")[0].qos_profile().depth(), 0u)
+      << "Precondition: discovery must report depth 0 for a KEEP_ALL publisher";
+
+  rclcpp::QoS qos = manager_->adapt_qos("/qos_depth_keep_all_topic");
+
+  EXPECT_EQ(qos.depth(), 100u);
+}

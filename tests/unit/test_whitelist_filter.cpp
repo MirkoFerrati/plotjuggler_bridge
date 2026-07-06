@@ -17,12 +17,12 @@
  * along with pj_bridge. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "pj_bridge/whitelist_filter.hpp"
-
 #include <gtest/gtest.h>
 
 #include <string>
 #include <vector>
+
+#include "pj_bridge/whitelist_filter.hpp"
 
 namespace pj_bridge {
 namespace {

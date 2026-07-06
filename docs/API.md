@@ -123,8 +123,10 @@ queue), then clamping the total to a configurable range — the same heuristic
 - **ROS2**: int parameters `min_qos_depth` (default `1`) and `max_qos_depth`
   (default `100`).
 
-If no publishers are discovered yet, the depth defaults to `min(100,
-max_qos_depth)`. Both values must be `>= 0` and `min_qos_depth <=
+If no publishers are discovered yet — or every discovered publisher reports
+depth `0` (KEEP_ALL, or an RMW such as `rmw_fastrtps_cpp` that does not
+propagate history depth through discovery) — the depth falls back to
+`min(100, max_qos_depth)`. Both values must be `>= 0` and `min_qos_depth <=
 max_qos_depth`; the server refuses to start otherwise. This is independent of
 the subscription's reliability/durability, which is separately adapted to
 match what the discovered publishers offer (a RELIABLE subscription still

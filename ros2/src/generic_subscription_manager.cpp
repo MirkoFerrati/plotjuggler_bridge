@@ -58,7 +58,15 @@ rclcpp::QoS GenericSubscriptionManager::adapt_qos(const std::string& topic_name)
     }
     total_depth += profile.depth();
   }
-  qos.keep_last(std::clamp(total_depth, min_qos_depth_, max_qos_depth_));
+  // Some RMWs (e.g. rmw_fastrtps_cpp) don't propagate publisher history
+  // depth through discovery and report 0 for every publisher; KEEP_ALL
+  // publishers also report 0. A total of 0 therefore means "unknown", not
+  // "no queue needed" — fall back to the historical default of 100 instead
+  // of clamping 0 up to min_qos_depth, which would create tiny queues that
+  // drop messages on high-rate topics.
+  const size_t depth =
+      total_depth > 0 ? std::clamp(total_depth, min_qos_depth_, max_qos_depth_) : std::min<size_t>(100, max_qos_depth_);
+  qos.keep_last(depth);
 
   // BEST_EFFORT matches both kinds of publisher; TRANSIENT_LOCAL only
   // matches if every publisher offers it.
