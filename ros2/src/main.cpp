@@ -22,9 +22,12 @@
 #include <chrono>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
+#include <string>
+#include <vector>
 
 #include "pj_bridge/bridge_server.hpp"
 #include "pj_bridge/middleware/websocket_middleware.hpp"
+#include "pj_bridge/whitelist_filter.hpp"
 #include "pj_bridge_ros2/ros2_subscription_manager.hpp"
 #include "pj_bridge_ros2/ros2_topic_source.hpp"
 
@@ -40,16 +43,25 @@ int main(int argc, char** argv) {
   node->declare_parameter<double>("publish_rate", 50.0);
   node->declare_parameter<double>("session_timeout", 10.0);
   node->declare_parameter<bool>("strip_large_messages", false);
+  node->declare_parameter<std::vector<std::string>>("topic_whitelist", {".*"});
 
   int port = node->get_parameter("port").as_int();
   double publish_rate = node->get_parameter("publish_rate").as_double();
   double session_timeout = node->get_parameter("session_timeout").as_double();
   bool strip_large_messages = node->get_parameter("strip_large_messages").as_bool();
+  std::vector<std::string> topic_whitelist = node->get_parameter("topic_whitelist").as_string_array();
 
   RCLCPP_INFO(
       node->get_logger(),
       "Configuration: port=%d, publish_rate=%.1f Hz, session_timeout=%.1f s, strip_large_messages=%s", port,
       publish_rate, session_timeout, strip_large_messages ? "true" : "false");
+
+  auto whitelist_result = pj_bridge::WhitelistFilter::create(topic_whitelist);
+  if (!whitelist_result) {
+    RCLCPP_ERROR(node->get_logger(), "Invalid topic_whitelist: %s", whitelist_result.error().c_str());
+    rclcpp::shutdown();
+    return 1;
+  }
 
   try {
     // Create backend components
@@ -58,7 +70,9 @@ int main(int argc, char** argv) {
     auto middleware = std::make_shared<pj_bridge::WebSocketMiddleware>();
 
     // Create bridge server
-    pj_bridge::BridgeServer server(topic_source, sub_manager, middleware, port, session_timeout, publish_rate);
+    pj_bridge::BridgeServer server(
+        topic_source, sub_manager, middleware, port, session_timeout, publish_rate,
+        std::move(whitelist_result.value()));
 
     if (!server.initialize()) {
       RCLCPP_ERROR(node->get_logger(), "Failed to initialize bridge server");

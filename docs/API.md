@@ -71,6 +71,10 @@ sequenceDiagram
 
 Discover available ROS2 topics.
 
+If a `topic_whitelist` is configured on the server, topics whose name does not
+fully match any whitelist pattern are omitted from the response entirely (see
+[Topic Whitelist](#topic-whitelist) below).
+
 **Request:**
 ```json
 {"command": "get_topics", "id": "gt1"}
@@ -88,9 +92,36 @@ Discover available ROS2 topics.
 }
 ```
 
+## Topic Whitelist
+
+The server can be configured with a list of regex patterns restricting which
+topics are visible and subscribable, mirroring foxglove_bridge's
+`topic_whitelist` option:
+
+- **ROS2**: string-array parameter `topic_whitelist`, default `[".*"]` (match everything).
+- **FastDDS / RTI**: repeatable CLI flag `--topic-whitelist`, default `.*`.
+
+Matching uses **full-match** ECMAScript regex semantics (`std::regex_match`,
+not a substring/prefix search): a pattern must match the *entire* topic name.
+For example, pattern `/cam` does **not** match `/camera`, but `/camera.*`
+matches `/camera` and `/camera/image`. A topic is allowed if it fully matches
+**any** configured pattern. An empty pattern list (or the default `.*`)
+matches every topic.
+
+Non-whitelisted topics are excluded from `get_topics` responses, and
+`subscribe` requests targeting them fail per-topic with reason
+`"Topic not whitelisted"` (see below).
+
 ## Subscribe
 
 Subscribe to one or more topics. **Breaking change:** Subscribe now uses an additive model - it only adds topics without removing existing subscriptions. Use the `unsubscribe` command to remove topics.
+
+If the server has a `topic_whitelist` configured, requests for topics that
+don't fully match any whitelist pattern fail with reason
+`"Topic not whitelisted"` — same failure shape as a nonexistent topic (see
+[Topic Whitelist](#topic-whitelist)). If every requested topic is rejected
+this way, the response is `status: "error"` with
+`error_code: "ALL_SUBSCRIPTIONS_FAILED"`.
 
 Each topic in the array can be either a plain string or an object with a `max_rate_hz` field for per-topic rate limiting. Both formats can be mixed in the same request.
 

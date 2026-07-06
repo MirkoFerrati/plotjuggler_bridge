@@ -25,6 +25,7 @@
 
 #include "pj_bridge/middleware/websocket_middleware.hpp"
 #include "pj_bridge/standalone_event_loop.hpp"
+#include "pj_bridge/whitelist_filter.hpp"
 #include "pj_bridge_rti/dds_subscription_manager.hpp"
 #include "pj_bridge_rti/dds_topic_discovery.hpp"
 
@@ -38,6 +39,7 @@ int main(int argc, char* argv[]) {
   std::string qos_profile;
   std::string log_level = "info";
   bool stats_enabled = false;
+  std::vector<std::string> topic_whitelist{".*"};
 
   app.add_option("--domains,-d", domain_ids, "DDS domain IDs")->required()->expected(1, -1);
   app.add_option("--port,-p", port, "WebSocket port")->default_val(9090)->check(CLI::Range(1, 65535));
@@ -46,6 +48,11 @@ int main(int argc, char* argv[]) {
   app.add_option("--qos-profile", qos_profile, "QoS profile XML file path");
   app.add_option("--log-level", log_level, "Log level (trace, debug, info, warn, error)")->default_val("info");
   app.add_flag("--stats", stats_enabled, "Print statistics every 5 seconds");
+  // Bound variable is already initialized to {".*"} (match everything); CLI11
+  // leaves it untouched if the flag is not passed, so no default_val() is
+  // needed (and default_val() on a vector<string> would round-trip through a
+  // single joined string, which is not what we want here).
+  app.add_option("--topic-whitelist", topic_whitelist, "Topic whitelist regex patterns (full-match, ECMAScript)");
 
   CLI11_PARSE(app, argc, argv);
 
@@ -59,13 +66,22 @@ int main(int argc, char* argv[]) {
   if (!qos_profile.empty()) {
     spdlog::info("  QoS profile: {}", qos_profile);
   }
+  spdlog::info("  Topic whitelist: {}", fmt::join(topic_whitelist, ", "));
+
+  auto whitelist_result = pj_bridge::WhitelistFilter::create(topic_whitelist);
+  if (!whitelist_result) {
+    spdlog::error("Invalid --topic-whitelist: {}", whitelist_result.error());
+    return 1;
+  }
 
   try {
     auto topic_source = std::make_shared<pj_bridge::DdsTopicDiscovery>(domain_ids, qos_profile);
     auto sub_manager = std::make_shared<pj_bridge::DdsSubscriptionManager>(*topic_source);
     auto middleware = std::make_shared<pj_bridge::WebSocketMiddleware>();
 
-    pj_bridge::BridgeServer server(topic_source, sub_manager, middleware, port, session_timeout, publish_rate);
+    pj_bridge::BridgeServer server(
+        topic_source, sub_manager, middleware, port, session_timeout, publish_rate,
+        std::move(whitelist_result.value()));
 
     pj_bridge::run_standalone_event_loop(
         server, sub_manager, middleware, {port, publish_rate, session_timeout, stats_enabled});

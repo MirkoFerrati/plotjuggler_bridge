@@ -35,6 +35,7 @@
 #include "pj_bridge/middleware/middleware_interface.hpp"
 #include "pj_bridge/subscription_manager_interface.hpp"
 #include "pj_bridge/topic_source_interface.hpp"
+#include "pj_bridge/whitelist_filter.hpp"
 #include "tl/expected.hpp"
 
 using json = nlohmann::json;
@@ -2002,4 +2003,95 @@ TEST_F(BridgeServerTest, SubscribeAcceptsEmptySchemaDefinition) {
   ASSERT_TRUE(response["schemas"].contains("/trigger"));
   EXPECT_EQ(response["schemas"]["/trigger"]["definition"], "");
   EXPECT_EQ(mock_sub_manager_->ref_count("/trigger"), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Topic whitelist filtering
+// ---------------------------------------------------------------------------
+
+// GetTopicsOmitsNonWhitelistedTopics
+TEST_F(BridgeServerTest, GetTopicsOmitsNonWhitelistedTopics) {
+  auto whitelist_result = WhitelistFilter::create({"/allowed.*"});
+  ASSERT_TRUE(whitelist_result.has_value());
+  server_ = std::make_unique<BridgeServer>(
+      mock_topic_source_, mock_sub_manager_, mock_, 19999, 10.0, 50.0, whitelist_result.value());
+  ASSERT_TRUE(server_->initialize());
+
+  mock_topic_source_->set_topics({{"/allowed/foo", "std_msgs/msg/String"}, {"/blocked", "std_msgs/msg/String"}});
+
+  json req;
+  req["command"] = "get_topics";
+  mock_->push_request("client_wl_get_topics", req.dump());
+  server_->process_requests();
+
+  json reply = mock_->pop_reply("client_wl_get_topics");
+  ASSERT_FALSE(reply.is_discarded());
+  EXPECT_EQ(reply["status"], "success");
+  ASSERT_TRUE(reply["topics"].is_array());
+  ASSERT_EQ(reply["topics"].size(), 1u);
+  EXPECT_EQ(reply["topics"][0]["name"], "/allowed/foo");
+}
+
+// SubscribeToNonWhitelistedTopicFailsAllSubscriptionsFailed
+TEST_F(BridgeServerTest, SubscribeToNonWhitelistedTopicFailsAllSubscriptionsFailed) {
+  auto whitelist_result = WhitelistFilter::create({"/allowed.*"});
+  ASSERT_TRUE(whitelist_result.has_value());
+  server_ = std::make_unique<BridgeServer>(
+      mock_topic_source_, mock_sub_manager_, mock_, 19999, 10.0, 50.0, whitelist_result.value());
+  ASSERT_TRUE(server_->initialize());
+
+  mock_topic_source_->set_topics({{"/blocked", "std_msgs/msg/String"}});
+  mock_sub_manager_->add_known_topic("/blocked");
+
+  json sub;
+  sub["command"] = "subscribe";
+  sub["topics"] = json::array({"/blocked"});
+  mock_->push_request("client_wl_blocked", sub.dump());
+  server_->process_requests();
+
+  json reply = mock_->pop_reply("client_wl_blocked");
+  ASSERT_FALSE(reply.is_discarded());
+  EXPECT_EQ(reply["status"], "error");
+  EXPECT_EQ(reply["error_code"], "ALL_SUBSCRIPTIONS_FAILED");
+  ASSERT_TRUE(reply.contains("failures"));
+  ASSERT_FALSE(reply["failures"].empty());
+  EXPECT_EQ(reply["failures"][0]["topic"], "/blocked");
+  EXPECT_EQ(reply["failures"][0]["reason"], "Topic not whitelisted");
+  EXPECT_EQ(mock_sub_manager_->ref_count("/blocked"), 0);
+}
+
+// SubscribeMixedWhitelistedAndNonWhitelistedTopicsPartialSuccess
+TEST_F(BridgeServerTest, SubscribeMixedWhitelistedAndNonWhitelistedTopicsPartialSuccess) {
+  auto whitelist_result = WhitelistFilter::create({"/allowed.*"});
+  ASSERT_TRUE(whitelist_result.has_value());
+  server_ = std::make_unique<BridgeServer>(
+      mock_topic_source_, mock_sub_manager_, mock_, 19999, 10.0, 50.0, whitelist_result.value());
+  ASSERT_TRUE(server_->initialize());
+
+  mock_topic_source_->set_topics({{"/allowed/foo", "std_msgs/msg/String"}, {"/blocked", "std_msgs/msg/String"}});
+  mock_sub_manager_->add_known_topic("/allowed/foo");
+  mock_sub_manager_->add_known_topic("/blocked");
+
+  json sub;
+  sub["command"] = "subscribe";
+  sub["topics"] = json::array({"/allowed/foo", "/blocked"});
+  mock_->push_request("client_wl_mixed", sub.dump());
+  server_->process_requests();
+
+  json reply = mock_->pop_reply("client_wl_mixed");
+  ASSERT_FALSE(reply.is_discarded());
+  EXPECT_EQ(reply["status"], "partial_success");
+  ASSERT_TRUE(reply["schemas"].contains("/allowed/foo"));
+  ASSERT_TRUE(reply.contains("failures"));
+
+  bool found_blocked_failure = false;
+  for (const auto& failure : reply["failures"]) {
+    if (failure["topic"] == "/blocked") {
+      EXPECT_EQ(failure["reason"], "Topic not whitelisted");
+      found_blocked_failure = true;
+    }
+  }
+  EXPECT_TRUE(found_blocked_failure);
+  EXPECT_EQ(mock_sub_manager_->ref_count("/allowed/foo"), 1);
+  EXPECT_EQ(mock_sub_manager_->ref_count("/blocked"), 0);
 }

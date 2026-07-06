@@ -60,13 +60,14 @@ double clamp_rate_hz(double rate_hz) {
 BridgeServer::BridgeServer(
     std::shared_ptr<TopicSourceInterface> topic_source,
     std::shared_ptr<SubscriptionManagerInterface> subscription_manager, std::shared_ptr<MiddlewareInterface> middleware,
-    int port, double session_timeout, double publish_rate)
+    int port, double session_timeout, double publish_rate, WhitelistFilter whitelist)
     : topic_source_(std::move(topic_source)),
       subscription_manager_(std::move(subscription_manager)),
       middleware_(std::move(middleware)),
       port_(port),
       session_timeout_(session_timeout),
       publish_rate_(publish_rate),
+      whitelist_(std::move(whitelist)),
       initialized_(false),
       total_messages_published_(0),
       total_bytes_published_(0),
@@ -225,16 +226,21 @@ std::string BridgeServer::handle_get_topics(const std::string& client_id, const 
   response["status"] = "success";
   response["topics"] = json::array();
 
+  size_t returned_count = 0;
   for (const auto& topic : topics) {
+    if (!whitelist_.matches(topic.name)) {
+      continue;
+    }
     json topic_entry;
     topic_entry["name"] = topic.name;
     topic_entry["type"] = topic.type;
     response["topics"].push_back(topic_entry);
+    returned_count++;
   }
 
   inject_response_fields(response, request);
 
-  spdlog::info("Returning {} topics to client '{}'", topics.size(), client_id);
+  spdlog::info("Returning {} topics to client '{}'", returned_count, client_id);
 
   return response.dump();
 }
@@ -297,6 +303,15 @@ std::string BridgeServer::handle_subscribe(const std::string& client_id, const n
   std::unordered_map<std::string, std::string> extracted_schemas;
 
   for (const auto& topic_name : topics_to_add) {
+    if (!whitelist_.matches(topic_name)) {
+      spdlog::warn("Client '{}' requested non-whitelisted topic '{}'", client_id, topic_name);
+      json failure;
+      failure["topic"] = topic_name;
+      failure["reason"] = "Topic not whitelisted";
+      failures.push_back(failure);
+      continue;
+    }
+
     if (topic_types.find(topic_name) == topic_types.end()) {
       spdlog::warn("Client '{}' requested non-existent topic '{}'", client_id, topic_name);
       json failure;

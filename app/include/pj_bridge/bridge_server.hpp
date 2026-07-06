@@ -31,6 +31,7 @@
 #include "pj_bridge/session_manager.hpp"
 #include "pj_bridge/subscription_manager_interface.hpp"
 #include "pj_bridge/topic_source_interface.hpp"
+#include "pj_bridge/whitelist_filter.hpp"
 
 namespace pj_bridge {
 
@@ -63,12 +64,13 @@ class BridgeServer {
    * @param port Server port (default: 9090)
    * @param session_timeout Session timeout in seconds (default: 10.0)
    * @param publish_rate Message aggregation publish rate in Hz (default: 50.0)
+   * @param whitelist Topic whitelist filter (default: matches everything)
    */
   explicit BridgeServer(
       std::shared_ptr<TopicSourceInterface> topic_source,
       std::shared_ptr<SubscriptionManagerInterface> subscription_manager,
       std::shared_ptr<MiddlewareInterface> middleware, int port = 9090, double session_timeout = 10.0,
-      double publish_rate = 50.0);
+      double publish_rate = 50.0, WhitelistFilter whitelist = {});
 
   /// Shuts down middleware before members are destroyed, preventing
   /// disconnect callbacks from firing into a partially destroyed object.
@@ -148,6 +150,7 @@ class BridgeServer {
   int port_;
   double session_timeout_;
   double publish_rate_;
+  WhitelistFilter whitelist_;
 
   // State
   std::atomic<bool> initialized_;
