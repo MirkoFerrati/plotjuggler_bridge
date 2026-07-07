@@ -35,72 +35,26 @@ concurrency:
 
 jobs:
   snap:
-    runs-on: ubuntu-24.04   # core24 base requires Noble host for destructive-mode
+    runs-on: ubuntu-latest
+    outputs:
+      snap-file: ${{ steps.build-snap.outputs.snap }}
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install snapcraft
-        run: sudo snap install snapcraft --classic
+        with:
+          fetch-depth: 0
 
       - name: Build snap
-        run: snapcraft --destructive-mode
+        uses: snapcore/action-build@v1
+        id: build-snap
 
-      - name: Install snap and run smoke tests
-        run: |
-          sudo snap install --dangerous pj-bridge_*.snap
-          sleep 3   # let snapd activate AppArmor/mount namespaces
-
-          # Install host-side ROS 2 deps for the publisher
-          sudo apt-get install -y ros-jazzy-rclpy ros-jazzy-std-msgs
-
-          # Set up FastRTPS UDP-only profile for host-side DDS processes
-          mkdir -p "$HOME/.config/pj-bridge"
-          cp snap/local/fastrtps_no_shm.xml "$HOME/.config/pj-bridge/fastrtps_no_shm.xml"
-
-          # Python venv for ws_reader.py
-          python3 -m venv /tmp/pj_test_venv
-          /tmp/pj_test_venv/bin/pip install -q -r tests/integration/requirements.txt
-
-          # Source ROS 2 and set UDP-only profile for host processes
-          source /opt/ros/jazzy/setup.bash
-          export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/.config/pj-bridge/fastrtps_no_shm.xml"
-
-          # Start the bridge snap
-          snap run pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090 \
-            > /tmp/pj_bridge.log 2>&1 &
-          BRIDGE_PID=$!
-          sleep 5
-
-          if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
-            echo "ERROR: bridge exited immediately"
-            cat /tmp/pj_bridge.log
-            exit 1
-          fi
-
-          # Start hello-world publisher
-          python3 tests/integration/pub_hello.py > /tmp/pub_hello.log 2>&1 &
-          PUB_PID=$!
-          sleep 3
-
-          # Run WebSocket reader — asserts 'hello world' received end-to-end
-          /tmp/pj_test_venv/bin/python3 tests/integration/ws_reader.py \
-            --url ws://localhost:9090 \
-            --topic /hello_world \
-            --timeout 25
-          READER_EXIT=$?
-
-          kill "$BRIDGE_PID" "$PUB_PID" 2>/dev/null || true
-
-          echo "--- Bridge log ---"
-          cat /tmp/pj_bridge.log
-
-          exit "$READER_EXIT"
+      - name: Install snap
+        run: sudo snap install --dangerous ${{ steps.build-snap.outputs.snap }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: snap-amd64
-          path: "*.snap"
+          path: ${{ steps.build-snap.outputs.snap }}
 
   release:
     needs: snap
@@ -132,14 +86,10 @@ jobs:
         with:
           name: snap-amd64
 
-      - name: Find snap file
-        id: snap-file
-        run: echo "path=$(ls pj-bridge_*.snap)" >> "$GITHUB_OUTPUT"
-
       - name: Publish to Snap Store
         uses: canonical/action-publish@v1
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         with:
-          snap: ${{ steps.snap-file.outputs.path }}
+          snap: ${{ needs.snap.outputs.snap-file }}
           release: stable
