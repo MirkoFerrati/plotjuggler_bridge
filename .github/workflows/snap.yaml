@@ -133,6 +133,10 @@ jobs:
         with:
           name: snap-amd64
 
+      - name: Find snap file
+        id: snap-file
+        run: echo "path=$(ls pj-bridge_*.snap)" >> "$GITHUB_OUTPUT"
+
       - name: Determine channel
         id: channel
         run: |
@@ -147,5 +151,5 @@ jobs:
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         with:
-          snap: pj-bridge_*.snap
+          snap: ${{ steps.snap-file.outputs.path }}
           release: ${{ steps.channel.outputs.name }}
