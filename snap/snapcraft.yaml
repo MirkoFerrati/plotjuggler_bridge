@@ -1,5 +1,6 @@
 name: pj-bridge
-version: 0.5.0
+adopt-info: pj_bridge   # version and grade derived from git tags (see pj_bridge part)
+version: git
 title: pj-bridge
 summary: ROS2 to WebSocket bridge server — forwards topic content at 50 Hz
 license: AGPL-3.0
@@ -13,7 +14,6 @@ description: >
   Clients subscribe to topics and receive ZSTD-compressed aggregated messages at
   50 Hz without needing a full middleware installation.
 confinement: strict
-grade: stable
 base: core24
 
 # ROS2 typesupport and middleware libraries are loaded via dlopen at runtime
@@ -34,6 +34,16 @@ parts:
   pj_bridge:
     plugin: colcon
     source: .
+    override-pull: |
+      craftctl default
+      # Derive the snap version and grade from the most recent git tag so that
+      # pushing a tag (e.g. v0.5.0) drives the published snap version.
+      # A clean tag -> stable grade; anything ahead of a tag -> devel grade.
+      git config --global --add safe.directory '*'
+      version="$(git describe --always --tags | sed -e 's/^v//;s/-/+git/;y/-/./')"
+      if echo "$version" | grep -q '+git'; then grade=devel; else grade=stable; fi
+      craftctl set version="$version"
+      craftctl set grade="$grade"
     build-environment:
       - ROS_DISTRO: jazzy
       - ROS_VERSION: "2"
