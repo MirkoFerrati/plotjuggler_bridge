@@ -1,0 +1,10 @@
+#!/bin/bash
+# pj-bridge-ros2 launcher
+# Strict-confinement snaps do not add /opt/... dirs to LD_LIBRARY_PATH
+# automatically, so we prepend them here before exec-ing the binary.
+export LD_LIBRARY_PATH="$SNAP/opt/ros/jazzy/lib:$SNAP/opt/ros/jazzy/lib/x86_64-linux-gnu:$SNAP/opt/ros/snap/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export AMENT_PREFIX_PATH="$SNAP/opt/ros/snap:$SNAP/opt/ros/jazzy"
+export COLCON_PREFIX_PATH="$SNAP/opt/ros/snap"
+export ROS_DISTRO=jazzy
+export ROS_VERSION=2
+exec "$SNAP/opt/ros/snap/lib/pj_bridge/pj_bridge_ros2" "$@"
