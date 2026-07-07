@@ -1,0 +1,151 @@
+# =============================================================================
+# Snap Package — Build, Test, Release, and Publish to Snap Store
+#
+# SETUP: Snap Store credentials
+# ------------------------------
+# 1. Register the snap name on https://snapcraft.io (one-time, needs Ubuntu SSO)
+# 2. Export credentials:
+#      snapcraft export-login \
+#        --snaps pj-bridge \
+#        --acls package_access,package_push,package_update,package_release \
+#        credentials.txt
+#      cat credentials.txt   # copy the entire output
+# 3. In GitHub → Settings → Secrets → Actions, create a secret named
+#    SNAPCRAFT_STORE_CREDENTIALS and paste the credentials.txt content.
+#
+# CHANNELS
+# ---------
+#   tag push  → stable   (e.g. v0.5.0 → snapcraft.io/pj-bridge)
+#   main push → edge     (rolling "try-before-you-buy" channel)
+# =============================================================================
+
+name: Snap Package
+
+on:
+  push:
+    tags: ['*']
+    branches: [main]   # edge channel publishes on every main commit
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snap:
+    runs-on: ubuntu-24.04   # core24 base requires Noble host for destructive-mode
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Build snap
+        run: snapcraft --destructive-mode
+
+      - name: Install snap and run smoke tests
+        run: |
+          sudo snap install --dangerous pj-bridge_*.snap
+          sleep 3   # let snapd activate AppArmor/mount namespaces
+
+          # Install host-side ROS 2 deps for the publisher
+          sudo apt-get install -y ros-jazzy-rclpy ros-jazzy-std-msgs
+
+          # Set up FastRTPS UDP-only profile for host-side DDS processes
+          mkdir -p "$HOME/.config/pj-bridge"
+          cp snap/local/fastrtps_no_shm.xml "$HOME/.config/pj-bridge/fastrtps_no_shm.xml"
+
+          # Python venv for ws_reader.py
+          python3 -m venv /tmp/pj_test_venv
+          /tmp/pj_test_venv/bin/pip install -q -r tests/integration/requirements.txt
+
+          # Source ROS 2 and set UDP-only profile for host processes
+          source /opt/ros/jazzy/setup.bash
+          export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/.config/pj-bridge/fastrtps_no_shm.xml"
+
+          # Start the bridge snap
+          snap run pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090 \
+            > /tmp/pj_bridge.log 2>&1 &
+          BRIDGE_PID=$!
+          sleep 5
+
+          if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+            echo "ERROR: bridge exited immediately"
+            cat /tmp/pj_bridge.log
+            exit 1
+          fi
+
+          # Start hello-world publisher
+          python3 tests/integration/pub_hello.py > /tmp/pub_hello.log 2>&1 &
+          PUB_PID=$!
+          sleep 3
+
+          # Run WebSocket reader — asserts 'hello world' received end-to-end
+          /tmp/pj_test_venv/bin/python3 tests/integration/ws_reader.py \
+            --url ws://localhost:9090 \
+            --topic /hello_world \
+            --timeout 25
+          READER_EXIT=$?
+
+          kill "$BRIDGE_PID" "$PUB_PID" 2>/dev/null || true
+
+          echo "--- Bridge log ---"
+          cat /tmp/pj_bridge.log
+
+          exit "$READER_EXIT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snap-amd64
+          path: "*.snap"
+
+  release:
+    needs: snap
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: snap-amd64
+
+      - name: Upload snap to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${{ github.ref_name }}"
+          gh release view "$tag" >/dev/null 2>&1 || \
+            gh release create "$tag" --title "$tag" --generate-notes || true
+          gh release upload "$tag" *.snap --clobber
+
+  publish:
+    needs: snap
+    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: snap-amd64
+
+      - name: Determine channel
+        id: channel
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "name=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=edge" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to Snap Store
+        uses: canonical/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: pj-bridge_*.snap
+          release: ${{ steps.channel.outputs.name }}
