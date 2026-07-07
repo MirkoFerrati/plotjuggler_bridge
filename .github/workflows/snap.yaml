@@ -1,5 +1,13 @@
 # =============================================================================
-# Snap Package — Build, Test, Release, and Publish to Snap Store
+# Snap Package — Build → Integration Test → Release → Publish
+#
+# Pipeline (every push / PR / manual run):
+#   snap              build the snap (snapcore/action-build) + quick install check
+#   integration-test  install the snap and run the full end-to-end suite
+#                       (host ROS 2 publisher -> bridge -> WebSocket reader)
+# Tag pushes additionally run (only if integration-test passes):
+#   release           attach the .snap to a GitHub Release
+#   publish           push the .snap to the Snap Store stable channel
 #
 # SETUP: Snap Store credentials
 # ------------------------------
@@ -25,9 +33,6 @@ on:
     tags: ['*']
   pull_request:
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -56,8 +61,76 @@ jobs:
           name: snap-amd64
           path: ${{ steps.build-snap.outputs.snap }}
 
-  release:
+  integration-test:
     needs: snap
+    runs-on: ubuntu-24.04   # ROS 2 Jazzy targets Noble
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download snap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: snap-amd64
+
+      - name: Install snap
+        run: |
+          sudo snap install --dangerous ./pj-bridge_*.snap
+          sleep 3   # let snapd activate AppArmor/mount namespaces
+
+      - name: Set up ROS 2 Jazzy (host publisher deps)
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: jazzy
+
+      - name: Run end-to-end integration test
+        run: |
+          # FastRTPS UDP-only profile so host DDS crosses the snap namespace boundary
+          mkdir -p "$HOME/.config/pj-bridge"
+          cp snap/local/fastrtps_no_shm.xml "$HOME/.config/pj-bridge/fastrtps_no_shm.xml"
+          export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/.config/pj-bridge/fastrtps_no_shm.xml"
+
+          # Python venv for the WebSocket reader
+          python3 -m venv /tmp/pj_test_venv
+          /tmp/pj_test_venv/bin/pip install -q -r tests/integration/requirements.txt
+
+          source /opt/ros/jazzy/setup.bash
+
+          # Start the bridge snap
+          snap run pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090 \
+            > /tmp/pj_bridge.log 2>&1 &
+          BRIDGE_PID=$!
+          sleep 5
+          if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+            echo "ERROR: bridge exited immediately"
+            cat /tmp/pj_bridge.log
+            exit 1
+          fi
+
+          # Start the hello-world publisher
+          python3 tests/integration/pub_hello.py > /tmp/pub_hello.log 2>&1 &
+          PUB_PID=$!
+          sleep 3
+
+          # Reader asserts 'hello world' received end-to-end over the WebSocket
+          set +e
+          /tmp/pj_test_venv/bin/python3 tests/integration/ws_reader.py \
+            --url ws://localhost:9090 \
+            --topic /hello_world \
+            --timeout 25
+          READER_EXIT=$?
+          set -e
+
+          kill "$BRIDGE_PID" "$PUB_PID" 2>/dev/null || true
+
+          echo "--- Bridge log ---"
+          cat /tmp/pj_bridge.log
+          echo "--- Publisher log ---"
+          cat /tmp/pub_hello.log
+
+          exit "$READER_EXIT"
+
+  release:
+    needs: [snap, integration-test]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -78,7 +151,7 @@ jobs:
           gh release upload "$tag" *.snap --clobber
 
   publish:
-    needs: snap
+    needs: [snap, integration-test]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
