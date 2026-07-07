@@ -83,6 +83,5 @@ apps:
     plugs:
       - network
       - network-bind
-      - shared-memory
     environment:
       FASTRTPS_DEFAULT_PROFILES_FILE: $SNAP/etc/pj-bridge/fastrtps_no_shm.xml
