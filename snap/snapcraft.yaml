@@ -1,7 +1,7 @@
 name: pj-bridge
 adopt-info: pj_bridge   # version and grade derived from git tags (see pj_bridge part)
 version: git
-title: pj-bridge
+title: PlotJuggler Bridge
 summary: ROS2 to WebSocket bridge server — forwards topic content at 50 Hz
 license: AGPL-3.0
 contact: https://github.com/PlotJuggler/plotjuggler_bridge/issues
