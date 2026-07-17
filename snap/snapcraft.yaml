@@ -22,13 +22,10 @@ lint:
   ignore:
     - library
 
-package-repositories:
-  - type: apt
-    url: http://packages.ros.org/ros2/ubuntu
-    suites: [noble]
-    components: [main]
-    key-id: C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
-    key-server: keyserver.ubuntu.com
+# The ros2-jazzy extension (enabled on the pj-bridge-ros2 app below) supplies the
+# ROS 2 apt package-repository, the colcon build/runtime environment
+# (ROS_DISTRO/ROS_VERSION), and the runtime command-chain that sources
+# /opt/ros/jazzy and the staged colcon workspace at /opt/ros/snap.
 
 parts:
   pj_bridge:
@@ -44,9 +41,6 @@ parts:
       if echo "$version" | grep -q '+git'; then grade=devel; else grade=stable; fi
       craftctl set version="$version"
       craftctl set grade="$grade"
-    build-environment:
-      - ROS_DISTRO: jazzy
-      - ROS_VERSION: "2"
     build-packages:
       - cmake
       - git
@@ -70,16 +64,18 @@ parts:
       - ros-jazzy-ros2launch
       - ros-jazzy-sensor-msgs
 
-  snap-local:
+  fastrtps-config:
     plugin: dump
     source: snap/local
     organize:
-      pj-bridge-ros2-launcher: usr/bin/pj-bridge-ros2-launcher
       fastrtps_no_shm.xml: etc/pj-bridge/fastrtps_no_shm.xml
+    prime:
+      - etc/pj-bridge/fastrtps_no_shm.xml
 
 apps:
   pj-bridge-ros2:
-    command: usr/bin/pj-bridge-ros2-launcher
+    command: opt/ros/snap/lib/pj_bridge/pj_bridge_ros2
+    extensions: [ros2-jazzy]
     plugs:
       - network
       - network-bind
