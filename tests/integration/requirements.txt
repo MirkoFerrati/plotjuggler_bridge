@@ -1,0 +1,4 @@
+# Python dependencies for the pj_bridge end-to-end smoke test
+# Install with: pip3 install -r tests/integration/requirements.txt
+websockets>=12.0
+zstandard>=0.22.0

@@ -1,0 +1,192 @@
+# =============================================================================
+# Snap Package — Build → Integration Test → Publish → (manual) Promote
+#
+# Pipeline (every push / PR / manual run):
+#   snap              build the snap (canonical/action-build) + quick install check
+#   integration-test  install the snap and run the full end-to-end suite
+#                       (host ROS 2 publisher -> bridge -> WebSocket reader)
+# Tag pushes additionally run (only if integration-test passes):
+#   publish           push the .snap to the Snap Store jazzy/candidate channel
+# Manual promotion (workflow_dispatch with "promote_to_stable" = true):
+#   promote           move the current jazzy/candidate revision to jazzy/stable
+#
+# CHANNELS
+# ---------
+#   tag push                        -> jazzy/candidate   (soak / manual verification)
+#   workflow_dispatch (promote box) -> jazzy/stable      (promote candidate -> stable)
+#
+# The "jazzy" track lets users pick the ROS 2 distribution, e.g.:
+#   snap install pj-bridge --channel jazzy/stable
+#
+# SETUP: Snap Store credentials
+# ------------------------------
+# 1. Register the snap name on https://snapcraft.io (one-time, needs Ubuntu SSO)
+# 2. Export credentials (ACLs must include package_release for the promote step):
+#      snapcraft export-login \
+#        --snaps pj-bridge \
+#        --acls package_access,package_push,package_update,package_release \
+#        credentials.txt
+#      cat credentials.txt   # copy the entire output
+# 3. In GitHub → Settings → Secrets → Actions, create a secret named
+#    SNAPCRAFT_STORE_CREDENTIALS and paste the credentials.txt content.
+# =============================================================================
+
+name: Snap Package
+
+on:
+  push:
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      promote_to_stable:
+        description: 'Promote the current jazzy/candidate revision to jazzy/stable'
+        type: boolean
+        default: false
+
+# Only the checkout needs repository access; publishing/promoting authenticate
+# to the Snap Store via SNAPCRAFT_STORE_CREDENTIALS, not the GITHUB_TOKEN.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snap:
+    runs-on: ubuntu-24.04
+    outputs:
+      snap-file: ${{ steps.build-snap.outputs.snap }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build snap
+        uses: canonical/action-build@v1.3.0
+        id: build-snap
+
+      - name: Install snap
+        run: sudo snap install --dangerous ${{ steps.build-snap.outputs.snap }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snap-amd64
+          path: ${{ steps.build-snap.outputs.snap }}
+
+  integration-test:
+    needs: snap
+    runs-on: ubuntu-24.04   # ROS 2 Jazzy targets Noble
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download snap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: snap-amd64
+
+      - name: Install snap
+        run: |
+          sudo snap install --dangerous ./pj-bridge_*.snap
+          sleep 3   # let snapd activate AppArmor/mount namespaces
+
+      - name: Install ROS 2 Jazzy publisher deps (rclpy + std_msgs only)
+        run: |
+          # The test only needs a host-side ROS 2 publisher (pub_hello.py imports
+          # rclpy + std_msgs). Install just those instead of the full ros-base
+          # metapackage + dev tooling that ros-tooling/setup-ros would pull in.
+          sudo apt-get update
+          sudo apt-get install -y curl
+          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+            -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo "$UBUNTU_CODENAME") main" \
+            | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ros-jazzy-rclpy \
+            ros-jazzy-std-msgs \
+            ros-jazzy-rmw-fastrtps-cpp
+
+      - name: Run end-to-end integration test
+        run: |
+          # FastRTPS UDP-only profile so host DDS crosses the snap namespace boundary
+          mkdir -p "$HOME/.config/pj-bridge"
+          cp snap/local/fastrtps_no_shm.xml "$HOME/.config/pj-bridge/fastrtps_no_shm.xml"
+          export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/.config/pj-bridge/fastrtps_no_shm.xml"
+
+          # Python venv for the WebSocket reader
+          python3 -m venv /tmp/pj_test_venv
+          /tmp/pj_test_venv/bin/pip install -q -r tests/integration/requirements.txt
+
+          source /opt/ros/jazzy/setup.bash
+
+          # Start the bridge snap
+          snap run pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090 \
+            > /tmp/pj_bridge.log 2>&1 &
+          BRIDGE_PID=$!
+          sleep 5
+          if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+            echo "ERROR: bridge exited immediately"
+            cat /tmp/pj_bridge.log
+            exit 1
+          fi
+
+          # Start the hello-world publisher
+          python3 tests/integration/pub_hello.py > /tmp/pub_hello.log 2>&1 &
+          PUB_PID=$!
+          sleep 3
+
+          # Reader asserts 'hello world' received end-to-end over the WebSocket
+          set +e
+          /tmp/pj_test_venv/bin/python3 tests/integration/ws_reader.py \
+            --url ws://localhost:9090 \
+            --topic /hello_world \
+            --timeout 25
+          READER_EXIT=$?
+          set -e
+
+          kill "$BRIDGE_PID" "$PUB_PID" 2>/dev/null || true
+
+          echo "--- Bridge log ---"
+          cat /tmp/pj_bridge.log
+          echo "--- Publisher log ---"
+          cat /tmp/pub_hello.log
+
+          exit "$READER_EXIT"
+
+  publish:
+    needs: [snap, integration-test]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: snap-amd64
+
+      - name: Publish to Snap Store (jazzy/candidate)
+        uses: canonical/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ needs.snap.outputs.snap-file }}
+          release: jazzy/candidate
+
+  promote:
+    # Manual gate: promote the current candidate revision to stable only when a
+    # human triggers the workflow with the promote_to_stable box checked.
+    if: github.event_name == 'workflow_dispatch' && inputs.promote_to_stable
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Promote jazzy/candidate -> jazzy/stable
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          snapcraft promote pj-bridge \
+            --from-channel jazzy/candidate \
+            --to-channel jazzy/stable \
+            --yes

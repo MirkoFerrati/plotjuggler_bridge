@@ -88,6 +88,20 @@ pixi global install pj-bridge-ros2-humble \
 pj_bridge_ros2 --ros-args -p port:=9090
 ```
 
+### Snap
+
+Pre-built snaps are available from the [Snap Store](https://snapcraft.io/pj-bridge).
+
+```bash
+sudo snap install pj-bridge
+
+# Run (add arguments if different from default)
+snap run pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090
+```
+
+> **Note**: The snap bundles ROS2 Jazzy and uses UDP-only DDS transport automatically —
+> no extra ROS2 installation is required on the machine running the bridge.
+
 ### AppImage
 
 Pre-built AppImages are available from [GitHub Releases](https://github.com/PlotJuggler/plotjuggler_bridge/releases).

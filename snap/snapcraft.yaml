@@ -1,0 +1,72 @@
+name: pj-bridge
+adopt-info: pj_bridge   # version and grade derived from git tags (see pj_bridge part)
+version: git
+title: PlotJuggler Bridge
+summary: ROS2 to WebSocket bridge server — forwards topic content at 50 Hz
+license: AGPL-3.0
+contact: https://github.com/PlotJuggler/plotjuggler_bridge/issues
+issues: https://github.com/PlotJuggler/plotjuggler_bridge/issues
+source-code: https://github.com/PlotJuggler/plotjuggler_bridge
+website: https://github.com/PlotJuggler/plotjuggler_bridge
+description: >
+  ROS2 bridge server that forwards middleware topic content over WebSocket to
+  PlotJuggler clients and any other WebSocket consumer.
+  Clients subscribe to topics and receive ZSTD-compressed aggregated messages at
+  50 Hz without needing a full middleware installation.
+confinement: strict
+base: core24
+
+# ROS2 typesupport and middleware libraries are loaded via dlopen at runtime
+# by the ROS2 plugin system; the library linter cannot detect this.
+lint:
+  ignore:
+    - library
+
+# The ros2-jazzy extension (enabled on the pj-bridge-ros2 app below) supplies the
+# ROS 2 apt package-repository, the colcon build/runtime environment
+# (ROS_DISTRO/ROS_VERSION), and the runtime command-chain that sources
+# /opt/ros/jazzy and the staged colcon workspace at /opt/ros/snap.
+
+parts:
+  pj_bridge:
+    plugin: colcon
+    source: .
+    override-pull: |
+      craftctl default
+      # Derive the snap version and grade from the most recent git tag so that
+      # pushing a tag (e.g. v0.5.0) drives the published snap version.
+      # A clean tag -> stable grade; anything ahead of a tag -> devel grade.
+      git config --global --add safe.directory '*'
+      version="$(git describe --always --tags | sed -e 's/^v//;s/-/+git/;y/-/./')"
+      if echo "$version" | grep -q '+git'; then grade=devel; else grade=stable; fi
+      craftctl set version="$version"
+      craftctl set grade="$grade"
+    # ROS build/runtime dependencies (rclcpp, sensor_msgs, nav_msgs,
+    # ament_index_cpp, geometry_msgs, launch_ros, ros2launch, spdlog, zstd,
+    # nlohmann-json, ...) are resolved automatically by the colcon plugin via
+    # rosdep from package.xml, and cmake/colcon/rosdep come from the ros2-jazzy
+    # extension. Only list what is NOT declared in package.xml: git (for the
+    # override-pull git describe) and the IXWebSocket TLS/zlib build deps that
+    # are pulled in via FetchContent.
+    build-packages:
+      - git
+      - libssl-dev
+      - zlib1g-dev
+
+  fastrtps-config:
+    plugin: dump
+    source: snap/local
+    organize:
+      fastrtps_no_shm.xml: etc/pj-bridge/fastrtps_no_shm.xml
+    prime:
+      - etc/pj-bridge/fastrtps_no_shm.xml
+
+apps:
+  pj-bridge-ros2:
+    command: opt/ros/snap/lib/pj_bridge/pj_bridge_ros2
+    extensions: [ros2-jazzy]
+    plugs:
+      - network
+      - network-bind
+    environment:
+      FASTRTPS_DEFAULT_PROFILES_FILE: $SNAP/etc/pj-bridge/fastrtps_no_shm.xml
