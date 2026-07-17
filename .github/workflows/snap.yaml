@@ -2,7 +2,7 @@
 # Snap Package — Build → Integration Test → Publish → (manual) Promote
 #
 # Pipeline (every push / PR / manual run):
-#   snap              build the snap (snapcore/action-build) + quick install check
+#   snap              build the snap (canonical/action-build) + quick install check
 #   integration-test  install the snap and run the full end-to-end suite
 #                       (host ROS 2 publisher -> bridge -> WebSocket reader)
 # Tag pushes additionally run (only if integration-test passes):
@@ -65,7 +65,7 @@ jobs:
           fetch-depth: 0
 
       - name: Build snap
-        uses: snapcore/action-build@v1
+        uses: canonical/action-build@v1.3.0
         id: build-snap
 
       - name: Install snap
