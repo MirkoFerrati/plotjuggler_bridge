@@ -1,0 +1,17 @@
+project: pj-bridge
+
+# `snapcraft test` manages the backend/path itself; it packs the snap, pushes
+# the project tree (exposed as $PROJECT_PATH) and the artifact (as
+# $CRAFT_ARTIFACT) into the test machine.
+backends:
+  craft:
+    type: craft
+    systems:
+      - ubuntu-24.04
+
+suites:
+  tests/spread/:
+    summary: pj-bridge snap end-to-end tests
+
+exclude:
+  - .git

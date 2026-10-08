@@ -1,0 +1,44 @@
+# =============================================================================
+# Snap Test — end-to-end integration test via `snapcraft test` (spread + LXD).
+#
+# Runs independently from the build/publish pipeline in snap.yaml. Spread packs
+# the snap, installs the snap under test plus the ros2-cli snap, and asserts a
+# message flows ROS 2 -> bridge -> WebSocket. On GitHub runners `snapcraft test`
+# uses its "ci" backend (the runner host); `snapcraft test` runs the exact same
+# thing locally (via an LXD VM).
+# =============================================================================
+
+name: Snap Test
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spread-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up snapcraft + LXD
+        run: |
+          sudo snap install snapcraft --classic
+          sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
+          # The runner's pre-installed Docker sets the iptables FORWARD policy to
+          # DROP, which cuts off the LXD bridge's internet access (snapcraft packs
+          # in a managed LXD instance). Allow traffic to/from lxdbr0.
+          sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+          sudo iptables -I DOCKER-USER -o lxdbr0 -j ACCEPT
+
+      - name: Run spread tests
+        run: sg lxd -c 'snapcraft test'

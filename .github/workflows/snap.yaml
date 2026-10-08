@@ -1,5 +1,6 @@
 # =============================================================================
-# Snap Package — build, test and publish via the canonical reusable workflow.
+# Snap Package — build, (install-check) and publish via the canonical reusable
+# workflow. The end-to-end integration test lives in snap-test.yaml.
 #
 # Branch push -> jazzy/edge, tag push -> jazzy/candidate. PRs build+test only.
 # Promotion jazzy/candidate -> jazzy/stable lives in snap-promote.yaml.
@@ -33,43 +34,5 @@ jobs:
       snapstore-login: ${{ secrets.SNAPSTORE_LOGIN }}
     with:
       snap-track: jazzy
-      # End-to-end check: ros2cli snap publisher -> bridge snap -> WebSocket reader.
-      snap-test-script: |
-        #!/usr/bin/env bash
-        set -euxo pipefail
-
-        # Host-side ROS 2 publisher via the ros2cli snap (no apt / ROS install).
-        sudo snap install ros2cli
-
-        # UDP-only FastRTPS profile so the publisher snap's DDS crosses the
-        # bridge snap namespace boundary. Must be a non-hidden path so the
-        # ros2cli snap can read it through the 'home' interface.
-        cp snap/local/fastrtps_no_shm.xml "$HOME/fastrtps_no_shm.xml"
-        export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/fastrtps_no_shm.xml"
-
-        python3 -m venv /tmp/pj_test_venv
-        /tmp/pj_test_venv/bin/pip install -q -r tests/integration/requirements.txt
-
-        snap run pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090 \
-          > /tmp/pj_bridge.log 2>&1 &
-        BRIDGE_PID=$!
-        sleep 5
-        if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
-          echo "ERROR: bridge exited immediately"; cat /tmp/pj_bridge.log; exit 1
-        fi
-
-        ros2cli.ros2 topic pub -r 1 /hello_world std_msgs/msg/String \
-          "data: 'hello world'" > /tmp/pub_hello.log 2>&1 &
-        PUB_PID=$!
-        sleep 3
-
-        set +e
-        /tmp/pj_test_venv/bin/python3 tests/integration/ws_reader.py \
-          --url ws://localhost:9090 --topic /hello_world --timeout 25
-        READER_EXIT=$?
-        set -e
-
-        kill "$BRIDGE_PID" "$PUB_PID" 2>/dev/null || true
-        echo "--- Bridge log ---";    cat /tmp/pj_bridge.log
-        echo "--- Publisher log ---"; cat /tmp/pub_hello.log
-        exit "$READER_EXIT"
+      # The reusable test step installs the snap and runs `snapcraft info` on it.
+      # The full end-to-end test runs separately in snap-test.yaml.
