@@ -33,21 +33,15 @@ parts:
     source: .
     override-pull: |
       craftctl default
-      # Derive the snap version and grade from the most recent git tag so that
-      # pushing a tag (e.g. v0.5.0) drives the published snap version.
-      # A clean tag -> stable grade; anything ahead of a tag -> devel grade.
+      # Version/grade from git tag: clean tag -> stable, ahead of tag -> devel.
       git config --global --add safe.directory '*'
       version="$(git describe --always --tags | sed -e 's/^v//;s/-/+git/;y/-/./')"
       if echo "$version" | grep -q '+git'; then grade=devel; else grade=stable; fi
       craftctl set version="$version"
       craftctl set grade="$grade"
-    # ROS build/runtime dependencies (rclcpp, sensor_msgs, nav_msgs,
-    # ament_index_cpp, geometry_msgs, launch_ros, ros2launch, spdlog, zstd,
-    # nlohmann-json, ...) are resolved automatically by the colcon plugin via
-    # rosdep from package.xml, and cmake/colcon/rosdep come from the ros2-jazzy
-    # extension. Only list what is NOT declared in package.xml: git (for the
-    # override-pull git describe) and the IXWebSocket TLS/zlib build deps that
-    # are pulled in via FetchContent.
+    # ROS deps come from package.xml via rosdep (colcon plugin + ros2-jazzy
+    # extension). Only list what package.xml does not: git (override-pull) and
+    # the IXWebSocket TLS/zlib build deps pulled in via FetchContent.
     build-packages:
       - git
       - libssl-dev
