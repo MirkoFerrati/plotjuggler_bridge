@@ -1,0 +1,46 @@
+summary: ROS 2 publisher (ros2-cli snap) -> pj-bridge snap -> WebSocket reader
+
+# The reader decodes the aggregated binary frame and asserts "hello world"
+# arrives end-to-end over the WebSocket.
+
+environment:
+  PORT: 9090
+  # Make DDS work between two strictly-confined snaps on a single CI host:
+  #  - FASTDDS_BUILTIN_TRANSPORTS=UDPv4: disable shared memory (confined snaps
+  #    can't create /dev/shm segments on GitHub runners -> "Permission denied")
+  #    and use UDP only.
+  #  - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST: discover peers via 127.0.0.1
+  #    unicast instead of multicast (GitHub runners have no loopback multicast).
+  # Both are plain env vars, so they reach both snaps with no unreadable files.
+  FASTDDS_BUILTIN_TRANSPORTS: UDPv4
+  ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+
+prepare: |
+  snap install ros2-cli --channel=jazzy/stable
+  # snapcraft packs the snap and exposes it as $CRAFT_ARTIFACT.
+  snap install --dangerous "$CRAFT_ARTIFACT"
+
+  apt-get update
+  apt-get install -y python3-venv
+  python3 -m venv /tmp/venv
+  /tmp/venv/bin/pip install -q -r "$PROJECT_PATH/tests/integration/requirements.txt"
+
+execute: |
+  snap run pj-bridge.pj-bridge-ros2 --ros-args -p port:="$PORT" \
+    > /tmp/bridge.log 2>&1 &
+  sleep 5
+
+  ros2-cli.ros2 topic pub -r 1 /hello_world std_msgs/msg/String \
+    "data: 'hello world'" > /tmp/pub.log 2>&1 &
+  sleep 3
+
+  /tmp/venv/bin/python3 "$PROJECT_PATH/tests/integration/ws_reader.py" \
+    --url ws://localhost:"$PORT" --topic /hello_world --timeout 25
+
+restore: |
+  pkill -f pj_bridge_ros2 || true
+  pkill -f "ros2-cli.ros2 topic pub" || true
+
+debug: |
+  echo "--- bridge log ---";    cat /tmp/bridge.log || true
+  echo "--- publisher log ---"; cat /tmp/pub.log || true

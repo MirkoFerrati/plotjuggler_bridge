@@ -112,8 +112,13 @@ gate to `jazzy/stable`. Publishing needs a `SNAPSTORE_LOGIN` repository secret:
 snapcraft export-login --snaps pj-bridge --channels edge,candidate -
 ```
 
-The end-to-end test publishes with the `ros2cli` snap (no host ROS install); see
-`tests/integration/smoke_tests.sh` to run it locally.
+The end-to-end integration test runs separately (`.github/workflows/snap-test.yaml`)
+via `snapcraft test` (spread in an LXD VM): a `ros2-cli` snap publisher ->
+bridge snap -> WebSocket reader. Run the exact same thing locally with:
+
+```bash
+snapcraft test
+```
 
 ### AppImage
 
