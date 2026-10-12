@@ -102,6 +102,19 @@ snap run pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090
 > **Note**: The snap bundles ROS2 Jazzy and uses UDP-only DDS transport automatically —
 > no extra ROS2 installation is required on the machine running the bridge.
 
+The snap is built, tested and published by CI via the
+[canonical/robotics-actions-workflows](https://github.com/canonical/robotics-actions-workflows)
+reusable workflows (`.github/workflows/snap.yaml`): branch pushes release to
+`jazzy/edge`, tags to `jazzy/candidate`, and `snap-promote.yaml` is a manual
+gate to `jazzy/stable`. Publishing needs a `SNAPSTORE_LOGIN` repository secret:
+
+```bash
+snapcraft export-login --snaps pj-bridge --channels edge,candidate -
+```
+
+The end-to-end test publishes with the `ros2cli` snap (no host ROS install); see
+`tests/integration/smoke_tests.sh` to run it locally.
+
 ### AppImage
 
 Pre-built AppImages are available from [GitHub Releases](https://github.com/PlotJuggler/plotjuggler_bridge/releases).

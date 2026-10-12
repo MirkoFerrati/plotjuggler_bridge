@@ -3,14 +3,14 @@
 # Smoke tests for the pj-bridge snap — full end-to-end bridge verification
 #
 # Pipeline:
-#   [host rclpy] pub_hello.py  →  DDS (UDP)  →  [snap] pj-bridge-ros2
+#   [ros2cli snap] ros2 topic pub  →  DDS (UDP)  →  [snap] pj-bridge-ros2
 #                                                       ↓ WebSocket :9090
 #                                               [host Python] ws_reader.py
 #                                                       ↓
 #                                               assert "hello world" decoded
 #
 # Requirements on the host:
-#   sudo apt install ros-jazzy-rclpy ros-jazzy-std-msgs
+#   sudo snap install ros2cli   (host-side ROS 2 publisher)
 #   pip3 install websockets zstandard is NOT needed — the script creates a venv automatically
 #
 # Usage:
@@ -29,7 +29,7 @@ FASTRTPS_PROFILE="$HOME/.config/pj-bridge/fastrtps_no_shm.xml"
 # ---------------------------------------------------------------------------
 if [ -z "$SNAP_FILE" ]; then
   echo "ERROR: no pj-bridge_*.snap found in $PROJECT_ROOT"
-  echo "       Build it first with: snapcraft --destructive-mode"
+  echo "       Build it first with: snapcraft pack"
   exit 1
 fi
 echo "Snap file: $SNAP_FILE"
@@ -78,11 +78,7 @@ echo "=== snap connections ==="
 snap connections pj-bridge
 
 # ---------------------------------------------------------------------------
-# Python venv for test dependencies
-# Created BEFORE sourcing ROS 2 so that set -e is still active and any
-# pip failure is caught immediately rather than silently swallowed.
-# pub_hello.py still uses the system Python so it can access rclpy from the
-# sourced ROS 2 environment; ws_reader.py uses the venv.
+# Python venv for the ws_reader dependencies (websockets + zstandard).
 # ---------------------------------------------------------------------------
 VENV_DIR="/tmp/pj_bridge_test_venv"
 echo ""
@@ -92,16 +88,16 @@ python3 -m venv --clear "$VENV_DIR"
 echo "  Dependencies installed: $("$VENV_DIR/bin/pip" freeze | tr '\n' ' ')"
 
 # ---------------------------------------------------------------------------
-# Source ROS 2 Jazzy on host (same requirement as termviz2 smoke tests)
+# Install the ros2cli snap (host-side ROS 2 publisher) and point its DDS at
+# the UDP-only profile so it crosses the snap namespace boundary.
+# The profile must be a non-hidden path for the snap's 'home' interface.
 # ---------------------------------------------------------------------------
-if [ ! -f /opt/ros/jazzy/setup.bash ]; then
-  echo "ERROR: /opt/ros/jazzy/setup.bash not found."
-  echo "Install with: sudo apt install ros-jazzy-rclpy ros-jazzy-std-msgs"
-  exit 1
+if ! snap list ros2cli >/dev/null 2>&1; then
+  echo "Installing ros2cli snap..."
+  sudo snap install ros2cli
 fi
-# shellcheck disable=SC1091
-source /opt/ros/jazzy/setup.bash
-export FASTRTPS_DEFAULT_PROFILES_FILE="$FASTRTPS_PROFILE"
+cp "$FASTRTPS_PROFILE" "$HOME/fastrtps_no_shm.xml"
+export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/fastrtps_no_shm.xml"
 
 # ---------------------------------------------------------------------------
 # Start the bridge snap
@@ -126,8 +122,9 @@ echo "  Bridge is running."
 # Start the hello-world publisher (host side)
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== Starting hello world publisher ==="
-python3 "$TEST_DIR/pub_hello.py" > /tmp/pub_hello.log 2>&1 &
+echo "=== Starting hello world publisher (ros2cli snap) ==="
+ros2cli.ros2 topic pub -r 1 /hello_world std_msgs/msg/String \
+    "data: 'hello world'" > /tmp/pub_hello.log 2>&1 &
 PUB_PID=$!
 echo "  Publisher PID: $PUB_PID"
 sleep 3   # let DDS participant discovery complete
