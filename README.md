@@ -96,7 +96,7 @@ Pre-built snaps are available from the [Snap Store](https://snapcraft.io/pj-brid
 sudo snap install pj-bridge
 
 # Run (add arguments if different from default)
-snap run pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090
+pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090
 ```
 
 > **Note**: The snap bundles ROS2 Jazzy and uses UDP-only DDS transport automatically —
@@ -112,8 +112,8 @@ gate to `jazzy/stable`. Publishing needs a `SNAPSTORE_LOGIN` repository secret:
 snapcraft export-login --snaps pj-bridge --channels edge,candidate -
 ```
 
-The end-to-end test publishes with the `ros2cli` snap (no host ROS install); see
-`tests/integration/smoke_tests.sh` to run it locally.
+The end-to-end test publishes with the `ros2cli` snap (no host ROS install) and
+runs as the `snap-test-script` in `.github/workflows/snap.yaml`.
 
 ### AppImage
 

@@ -22,11 +22,6 @@ lint:
   ignore:
     - library
 
-# The ros2-jazzy extension (enabled on the pj-bridge-ros2 app below) supplies the
-# ROS 2 apt package-repository, the colcon build/runtime environment
-# (ROS_DISTRO/ROS_VERSION), and the runtime command-chain that sources
-# /opt/ros/jazzy and the staged colcon workspace at /opt/ros/snap.
-
 parts:
   pj_bridge:
     plugin: colcon
