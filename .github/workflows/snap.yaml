@@ -54,9 +54,15 @@ jobs:
           "data: 'hello world'" > /tmp/pub_hello.log 2>&1 &
         PUB_PID=$!
 
-        # Drive a single subscribe over the WebSocket (no payload parsing).
-        echo '{"command":"subscribe","topics":["/hello_world"],"id":"s1"}' \
-          | timeout 5 websocat ws://localhost:9090 || true
+        # Retry while the WebSocket starts up and DDS discovers the topic.
+        for attempt in {1..10}; do
+          echo '{"command":"subscribe","topics":["/hello_world"],"id":"s1"}' \
+            | timeout 5 websocat ws://localhost:9090 || true
+          if grep -q "subscribed to topic '/hello_world'" /tmp/pj_bridge.log; then
+            break
+          fi
+          sleep 1
+        done
 
         set +e
         grep -q "subscribed to topic '/hello_world'" /tmp/pj_bridge.log
