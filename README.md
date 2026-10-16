@@ -100,7 +100,7 @@ pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090
 ```
 
 > **Note**: The snap bundles ROS2 Jazzy and uses UDP-only DDS transport automatically —
-> no extra ROS2 installation is required on the machine running the bridge.
+> no extra ROS 2 installation is required on the machine running the bridge.
 
 The snap is built, tested and published by CI via the
 [canonical/robotics-actions-workflows](https://github.com/canonical/robotics-actions-workflows)
