@@ -5,7 +5,7 @@
 # Promotion jazzy/candidate -> jazzy/stable lives in snap-promote.yaml.
 #
 # SETUP: store the credentials from
-#   snapcraft export-login --snaps pj-bridge --channels edge,candidate -
+#   snapcraft export-login --snaps pj-bridge
 # as the SNAPSTORE_LOGIN repository secret.
 # =============================================================================
 
@@ -46,24 +46,13 @@ jobs:
           https://github.com/vi/websocat/releases/download/v1.13.0/websocat.x86_64-unknown-linux-musl
         sudo chmod +x /usr/local/bin/websocat
 
-        # UDP-only FastRTPS profile so the publisher snap's DDS crosses the
-        # bridge snap namespace boundary. Must be a non-hidden path so the
-        # ros2-cli snap can read it through the 'home' interface.
-        cp snap/local/fastrtps_no_shm.xml "$HOME/fastrtps_no_shm.xml"
-        export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/fastrtps_no_shm.xml"
-
         pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090 \
           > /tmp/pj_bridge.log 2>&1 &
         BRIDGE_PID=$!
-        sleep 5
-        if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
-          echo "ERROR: bridge exited immediately"; cat /tmp/pj_bridge.log; exit 1
-        fi
 
         ros2-cli.ros2 topic pub -r 1 /hello_world std_msgs/msg/String \
           "data: 'hello world'" > /tmp/pub_hello.log 2>&1 &
         PUB_PID=$!
-        sleep 4
 
         # Drive a single subscribe over the WebSocket (no payload parsing).
         echo '{"command":"subscribe","topics":["/hello_world"],"id":"s1"}' \

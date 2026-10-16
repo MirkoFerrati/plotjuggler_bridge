@@ -16,8 +16,8 @@ description: >
 confinement: strict
 base: core24
 
-# ROS2 typesupport and middleware libraries are loaded via dlopen at runtime
-# by the ROS2 plugin system; the library linter cannot detect this.
+# ROS 2 typesupport and middleware libraries are loaded via dlopen at runtime
+# by the ROS 2 plugin system; the library linter cannot detect this.
 lint:
   ignore:
     - library
@@ -34,9 +34,6 @@ parts:
       if echo "$version" | grep -q '+git'; then grade=devel; else grade=stable; fi
       craftctl set version="$version"
       craftctl set grade="$grade"
-    # ROS deps come from package.xml via rosdep (colcon plugin + ros2-jazzy
-    # extension). Only list what package.xml does not: git (override-pull) and
-    # the IXWebSocket TLS/zlib build deps pulled in via FetchContent.
     build-packages:
       - git
       - libssl-dev
