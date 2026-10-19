@@ -95,7 +95,7 @@ Pre-built snaps are available from the [Snap Store](https://snapcraft.io/pj-brid
 ```bash
 sudo snap install pj-bridge
 
-# Run (add arguments if different from default)
+# Run
 pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090
 ```
 

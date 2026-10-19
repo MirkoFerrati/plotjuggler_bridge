@@ -39,12 +39,22 @@ parts:
       - libssl-dev
       - zlib1g-dev
 
+  snap-dependencies:
+    # A separate manifest keeps the broad runtime dependencies (msgs & rmw)
+    plugin: colcon
+    source: snap/local
+    after: [pj_bridge]
+    colcon-packages: [pj_bridge_snap]
+    stage:
+      - -opt/ros/snap/local_setup.sh
+      - -opt/ros/snap/setup.sh
+
   fastrtps-config:
     plugin: dump
     source: snap/local
     organize:
       fastrtps_no_shm.xml: etc/pj-bridge/fastrtps_no_shm.xml
-    prime:
+    stage:
       - etc/pj-bridge/fastrtps_no_shm.xml
 
 apps:
