@@ -33,6 +33,7 @@ jobs:
     secrets:
       snapstore-login: ${{ secrets.SNAPSTORE_LOGIN }}
     with:
+      runs-on: '["ubuntu-latest", "ubuntu-24.04-arm"]'
       snap-track: jazzy
       # Packaging check: start the bridge snap, have a ros2-cli snap publish a
       # topic, drive one WebSocket subscribe, and confirm the bridge served it.
@@ -41,9 +42,14 @@ jobs:
         set -euxo pipefail
 
         sudo snap install ros2-cli --channel jazzy
-        # websocat has no snap; grab the pinned static musl binary.
+        # websocat has no snap; grab the pinned static musl binary for this runner.
+        case "$(uname -m)" in
+          x86_64) websocat_arch=x86_64 ;;
+          aarch64) websocat_arch=aarch64 ;;
+          *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+        esac
         sudo curl -fsSL -o /usr/local/bin/websocat \
-          https://github.com/vi/websocat/releases/download/v1.13.0/websocat.x86_64-unknown-linux-musl
+          "https://github.com/vi/websocat/releases/download/v1.13.0/websocat.${websocat_arch}-unknown-linux-musl"
         sudo chmod +x /usr/local/bin/websocat
 
         pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090 \
@@ -69,7 +75,7 @@ jobs:
         TEST_EXIT=$?
         set -e
 
-        kill "$BRIDGE_PID" "$PUB_PID" 2>/dev/null || true
+        kill "${BRIDGE_PID}" "${PUB_PID}" 2>/dev/null || true
         echo "--- Bridge log ---";    cat /tmp/pj_bridge.log
         echo "--- Publisher log ---"; cat /tmp/pub_hello.log
-        exit "$TEST_EXIT"
+        exit "${TEST_EXIT}"
