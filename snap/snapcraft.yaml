@@ -9,10 +9,15 @@ issues: https://github.com/PlotJuggler/plotjuggler_bridge/issues
 source-code: https://github.com/PlotJuggler/plotjuggler_bridge
 website: https://github.com/PlotJuggler/plotjuggler_bridge
 description: >
-  ROS2 bridge server that forwards middleware topic content over WebSocket to
+  ROS 2 bridge server that forwards middleware topic content over WebSocket to
   PlotJuggler clients and any other WebSocket consumer.
+
   Clients subscribe to topics and receive ZSTD-compressed aggregated messages at
   50 Hz without needing a full middleware installation.
+
+  Call the snap with:
+    pj-bridge.pj-bridge-ros2 --ros-args -p port:=9090
+
 confinement: strict
 base: core24
 
